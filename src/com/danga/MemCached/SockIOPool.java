@@ -20,12 +20,26 @@
  */
 package com.danga.MemCached;
 
-import java.util.*;
-import java.util.zip.*;
-import java.net.*;
-import java.io.*;
+import java.io.BufferedOutputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.DataInputStream;
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.net.Socket;
+import java.net.UnknownHostException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.IdentityHashMap;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.zip.CRC32;
+
 import org.apache.log4j.Logger;
+
 
 /** 
  * This class is a connection pool for maintaning a pool of persistent connections<br/>
@@ -870,6 +884,8 @@ public class SockIOPool {
 
 				if ( aSockets != null && !aSockets.isEmpty() ) {
 
+					SockIO availSockIO = null;
+					List<SockIO> removes = new ArrayList<SockIO>();
 					for ( Iterator<SockIO> i = aSockets.keySet().iterator(); i.hasNext(); ) {
 						SockIO socket = i.next();
 
@@ -877,13 +893,14 @@ public class SockIOPool {
 							log.debug( "++++ moving socket for host (" + host + ") to busy pool ... socket: " + socket );
 
 							// remove from avail pool
-							i.remove();
+							removes.add(socket);
 
 							// add to busy pool
 							addSocketToPool( busyPool, host, socket );
 
 							// return socket
-							return socket;
+							availSockIO = socket;
+							break;
 						}
 						else {
 							// not connected, so we need to remove it
@@ -894,11 +911,14 @@ public class SockIOPool {
 								log.debug( "++++ error trying to true close the socket" );
 							}
 
-							socket = null;
-
-							// remove from avail pool
-							i.remove();
+							removes.add(socket);
 						}
+					}
+					for(SockIO socket : removes){
+						aSockets.remove(socket);
+					}
+					if(availSockIO != null){
+						return availSockIO;
 					}
 				}
 			}
@@ -1003,6 +1023,8 @@ public class SockIOPool {
 			Map<SockIO,Long> sockets = pool.get( host );
 
 			if ( sockets != null && sockets.size() > 0 ) {
+
+				List<SockIO> removes = new ArrayList<SockIO>();
 				for ( Iterator<SockIO> i = sockets.keySet().iterator(); i.hasNext(); ) {
 					SockIO socket = i.next();
 					try {
@@ -1012,8 +1034,11 @@ public class SockIOPool {
 						log.error( "++++ failed to close socket: " + ioe.getMessage() );
 					}
 
-					i.remove();
+					removes.add(socket);
 					socket = null;
+				}
+				for(SockIO socket : removes){
+					sockets.remove(socket);
 				}
 			}
 		}
@@ -1067,25 +1092,29 @@ public class SockIOPool {
 	 * 
 	 * @param pool pool to close
 	 */
-	protected void closePool( Map<String,Map<SockIO,Long>> pool ) {
-		 for ( Iterator<String> i = pool.keySet().iterator(); i.hasNext(); ) {
-			 String host = i.next();
-			 Map<SockIO,Long> sockets = pool.get( host );
+	protected void closePool(Map<String, Map<SockIO, Long>> pool) {
+		for (Iterator<String> i = pool.keySet().iterator(); i.hasNext();) {
+			String host = i.next();
+			Map<SockIO, Long> sockets = pool.get(host);
 
-			 for ( Iterator<SockIO> j = sockets.keySet().iterator(); j.hasNext(); ) {
-				 SockIO socket = j.next();
+			List<SockIO> removes = new ArrayList<SockIO>();
+			for (Iterator<SockIO> j = sockets.keySet().iterator(); j.hasNext();) {
+				SockIO socket = j.next();
 
-				 try {
-					 socket.trueClose();
-				 }
-				 catch ( IOException ioe ) {
-					 log.error( "++++ failed to trueClose socket: " + socket.toString() + " for host: " + host );
-				 }
+				try {
+					socket.trueClose();
+				} catch (IOException ioe) {
+					log.error("++++ failed to trueClose socket: "
+							+ socket.toString() + " for host: " + host);
+				}
 
-				 j.remove();
-				 socket = null;
-			 }
-		 }
+				removes.add(socket);
+				socket = null;
+			}
+			for (SockIO socket : removes) {
+				sockets.remove(socket);
+			}
+		}
 	}
 
 	/** 
@@ -1196,6 +1225,7 @@ public class SockIOPool {
 						? diff
 						: (diff) / poolMultiplier;
 
+					List<SockIO> removes = new ArrayList<SockIO>();
 					log.debug( "++++ need to remove " + needToClose + " spare sockets for pool for host: " + host );
 					for ( Iterator<SockIO> j = sockets.keySet().iterator(); j.hasNext(); ) {
 
@@ -1219,10 +1249,13 @@ public class SockIOPool {
 								log.error( ioe.getMessage(), ioe );
 							}
 
-							j.remove();
+							removes.add(socket);
 							socket = null;
 							needToClose--;
 						}
+					}
+					for(SockIO socket : removes){
+						sockets.remove(socket);
 					}
 				}
 
@@ -1239,6 +1272,7 @@ public class SockIOPool {
 
 				log.debug( "++++ Size of busy pool for host (" + host + ")  = " + sockets.size() );
 
+				List<SockIO> removes = new ArrayList<SockIO>();
 				// loop through all connections and check to see if we have any hung connections
 				for ( Iterator<SockIO> j = sockets.keySet().iterator(); j.hasNext(); ) {
 					// remove stale entries
@@ -1258,9 +1292,12 @@ public class SockIOPool {
 							log.error( ioe.getMessage(), ioe );
 						}
 
-						j.remove();
+						removes.add(socket);
 						socket = null;
 					}
+				}
+				for(SockIO socket : removes){
+					sockets.remove(socket);
 				}
 			}
 		}
